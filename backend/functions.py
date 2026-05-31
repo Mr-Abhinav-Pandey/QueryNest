@@ -79,9 +79,12 @@ def extract_text_from_pdf(file: UploadFile) -> str:
 
 def upload_and_index(file: UploadFile) -> Dict[str, str]:
     """
-    Upload a PDF file to Supabase storage,
-    extract text, generate embeddings, update FAISS,
-    and store metadata in Supabase database.
+    Upload a PDF file to Supabase storage, extract text, generate embeddings,
+    store metadata in database, and update FAISS index.
+    
+    Order: Storage → Database → FAISS (to ensure consistency).
+    If DB insert fails, rolls back storage upload.
+    If FAISS insertion fails, preserves storage and DB data.
     """
     # Read file bytes
     file_bytes: bytes = file.file.read()
@@ -89,41 +92,90 @@ def upload_and_index(file: UploadFile) -> Dict[str, str]:
 
     # 1. Compute hash for duplicate detection
     file_hash: str = compute_file_hash(file_bytes)
-    existing = supabase.table("documents").select("*").eq("file_hash", file_hash).execute()
-    if existing.data:
-        return {"message": f"{file.filename} already uploaded."}
+    try:
+        existing = supabase.table("documents").select("*").eq("file_hash", file_hash).execute()
+        if existing.data:
+            return {"message": f"{file.filename} already uploaded."}
+    except Exception as e:
+        logging.error(f"Duplicate check failed for {file.filename}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to check for duplicates. Please try again.")
 
-    # 2. Upload to Supabase Storage
-    file_path: str = f"{file.filename}"
-    supabase.storage.from_(BUCKET_NAME).upload(
-        file=file_bytes, path=file_path, file_options={"upsert": "false"}
-    )
-
-    # 3. Extract text from PDF
+    # 2. Extract text from PDF
     text: str = extract_text_from_pdf(file)
     if not text.strip():
-        return {"message": "No extractable text found."}
+        return {"message": "No extractable text found in PDF."}
 
-    # 4. Generate embeddings and update FAISS
-    embedding: np.ndarray = model.encode([text])
-    index.add(embedding)
-    pdf_texts.append({
-        "filename": file.filename,
-        "content": text,
-        "file_path": file_path,
-    })
+    # 3. Generate embeddings
+    try:
+        embedding: np.ndarray = model.encode([text])
+    except Exception as e:
+        logging.error(f"Embedding generation failed for {file.filename}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process document. Please try again.")
 
-    # 5. Insert metadata into Supabase DB
-    supabase.table("documents").insert({
-        "filename": file.filename,
-        "file_path": file_path,
-        "content": text,
-        "embedding": embedding[0].tolist(),
-        "file_hash": file_hash
-    }).execute()
+    file_path: str = f"{file.filename}"
+
+    # 4. Upload to Supabase Storage (first external modification)
+    try:
+        supabase.storage.from_(BUCKET_NAME).upload(
+            file=file_bytes, path=file_path, file_options={"upsert": "false"}
+        )
+    except Exception as e:
+        logging.error(f"Storage upload failed for {file.filename}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to store document. Please try again.")
+
+    # 5. Insert metadata into Supabase DB (second external modification, can be rolled back)
+    try:
+        supabase.table("documents").insert({
+            "filename": file.filename,
+            "file_path": file_path,
+            "content": text,
+            "embedding": embedding[0].tolist(),
+            "file_hash": file_hash
+        }).execute()
+    except Exception as db_error:
+        # Rollback: delete file from storage
+        rollback_success = False
+        try:
+            supabase.storage.from_(BUCKET_NAME).remove([file_path])
+            rollback_success = True
+        except Exception as rollback_error:
+            # Rollback itself failed - critical error
+            logging.critical(
+                f"CRITICAL: Upload rollback failed for {file.filename}. "
+                f"DB error: {db_error}. Rollback error: {rollback_error}. "
+                f"Orphaned file may exist in storage."
+            )
+        
+        # Raise appropriate error based on rollback outcome
+        if rollback_success:
+            logging.error(f"DB insert failed for {file.filename}, rolled back storage upload: {db_error}")
+            raise HTTPException(status_code=500, detail="Upload failed. Please try again.")
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Upload failed during cleanup. Please retry."
+            )
+
+    # 6. Add to FAISS index (third modification, not rolled back on failure)
+    try:
+        index.add(embedding)
+        pdf_texts.append({
+            "filename": file.filename,
+            "content": text,
+            "file_path": file_path,
+        })
+    except Exception as e:
+        logging.error(
+            f"FAISS indexing failed for {file.filename}: {e}. "
+            f"File is stored in database and storage. Index will be rebuilt on restart."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Upload complete but indexing failed. File will be indexed on next restart."
+        )
 
     logging.info(f"Uploaded and indexed PDF: {file.filename}")
-    return {"message": f"File {file.filename} uploaded and indexed."}
+    return {"message": f"File {file.filename} uploaded and indexed successfully."}
 
 
 # --------------------------------------------------------
@@ -176,9 +228,9 @@ def load_index_from_db() -> None:
     except Exception as e:
         logging.error(
             f"Failed to load index from Supabase during startup: {type(e).__name__}: {e}. "
-            f"Starting with empty FAISS index. Uploads will still work."
+            f"Starting with empty FAISS index."
         )
-        # App continues with empty index; uploads will work on the next request
+        # App continues with empty index
 
 
 # --------------------------------------------------------
