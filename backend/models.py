@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 class SearchRequest(BaseModel):
     query: str
@@ -9,4 +9,4 @@ class SearchResult(BaseModel):
     filename: str
     snippet: str
     score: float
-    url: str
+    url: Optional[str]

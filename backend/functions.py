@@ -3,7 +3,7 @@ import io
 import os
 import json
 import hashlib
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 import faiss
@@ -47,7 +47,7 @@ def compute_file_hash(file_bytes: bytes) -> str:
     return hashlib.sha256(file_bytes).hexdigest()
 
 
-def get_pdf_signed_url(file_path: str) -> str:
+def get_pdf_signed_url(file_path: str) -> Optional[str]:
     """
     Create a time-limited signed URL for a PDF stored in Supabase Storage.
     """
@@ -55,10 +55,10 @@ def get_pdf_signed_url(file_path: str) -> str:
         response = supabase.storage.from_(BUCKET_NAME).create_signed_url(
             file_path, 3600
         )
-        return response.get("signedURL") or response.get("signedUrl") or ""
+        return response.get("signedURL") or response.get("signedUrl")
     except Exception as e:
         logging.warning(f"Failed to create signed URL for {file_path}: {e}")
-        return ""
+        return None
 
 
 def extract_text_from_pdf(file: UploadFile) -> str:
