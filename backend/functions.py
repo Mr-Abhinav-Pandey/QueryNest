@@ -47,6 +47,20 @@ def compute_file_hash(file_bytes: bytes) -> str:
     return hashlib.sha256(file_bytes).hexdigest()
 
 
+def get_pdf_signed_url(file_path: str) -> str:
+    """
+    Create a time-limited signed URL for a PDF stored in Supabase Storage.
+    """
+    try:
+        response = supabase.storage.from_(BUCKET_NAME).create_signed_url(
+            file_path, 3600
+        )
+        return response.get("signedURL") or response.get("signedUrl") or ""
+    except Exception as e:
+        logging.warning(f"Failed to create signed URL for {file_path}: {e}")
+        return ""
+
+
 def extract_text_from_pdf(file: UploadFile) -> str:
     """
     Extract all text from a given PDF file.
@@ -93,7 +107,11 @@ def upload_and_index(file: UploadFile) -> Dict[str, str]:
     # 4. Generate embeddings and update FAISS
     embedding: np.ndarray = model.encode([text])
     index.add(embedding)
-    pdf_texts.append({"filename": file.filename, "content": text})
+    pdf_texts.append({
+        "filename": file.filename,
+        "content": text,
+        "file_path": file_path,
+    })
 
     # 5. Insert metadata into Supabase DB
     supabase.table("documents").insert({
@@ -124,7 +142,9 @@ def load_index_from_db() -> None:
     index.reset()
 
     # Fetch all stored documents
-    response = supabase.table("documents").select("filename, content, embedding").execute()
+    response = supabase.table("documents").select(
+        "filename, content, embedding, file_path"
+    ).execute()
     docs: List[Dict[str, Any]] = response.data or []
 
     if not docs:
@@ -133,7 +153,11 @@ def load_index_from_db() -> None:
 
     embeddings: List[List[float]] = []
     for doc in docs:
-        pdf_texts.append({"filename": doc["filename"], "content": doc["content"]})
+        pdf_texts.append({
+            "filename": doc["filename"],
+            "content": doc["content"],
+            "file_path": doc.get("file_path") or doc["filename"],
+        })
         embedding = doc["embedding"]
         # Ensure embedding is a list of floats
         if isinstance(embedding, str):
@@ -155,7 +179,7 @@ def load_index_from_db() -> None:
 def semantic_search(request: SearchRequest) -> List[SearchResult]:
     """
     Perform semantic search on indexed documents.
-    Returns a list of SearchResult with filename, text snippet, and L2 distance score.
+    Returns a list of SearchResult with filename, snippet, score, and signed PDF URL.
     """
     if len(pdf_texts) == 0:
         return []
@@ -170,11 +194,13 @@ def semantic_search(request: SearchRequest) -> List[SearchResult]:
             continue
         file_info = pdf_texts[idx]
         snippet: str = file_info["content"][:200] + "..."
+        file_path: str = file_info.get("file_path") or file_info["filename"]
         results.append(
             SearchResult(
                 filename=file_info["filename"],
                 snippet=snippet,
                 score=float(D[0][rank]),
+                url=get_pdf_signed_url(file_path),
             )
         )
 
