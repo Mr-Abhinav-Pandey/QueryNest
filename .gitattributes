@@ -1,0 +1,6 @@
+frontend/windows/** linguist-generated=true
+frontend/linux/** linguist-generated=true
+frontend/macos/** linguist-generated=true
+frontend/windows/** linguist-vendored
+frontend/linux/** linguist-vendored
+frontend/macos/** linguist-vendored
