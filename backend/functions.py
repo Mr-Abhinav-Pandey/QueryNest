@@ -134,6 +134,7 @@ def load_index_from_db() -> None:
     """
     Load stored embeddings and document metadata
     from Supabase database into FAISS and memory.
+    Gracefully handles Supabase connection failures.
     """
     global index, pdf_texts
 
@@ -141,35 +142,43 @@ def load_index_from_db() -> None:
     pdf_texts.clear()
     index.reset()
 
-    # Fetch all stored documents
-    response = supabase.table("documents").select(
-        "filename, content, embedding, file_path"
-    ).execute()
-    docs: List[Dict[str, Any]] = response.data or []
+    try:
+        # Fetch all stored documents
+        response = supabase.table("documents").select(
+            "filename, content, embedding, file_path"
+        ).execute()
+        docs: List[Dict[str, Any]] = response.data or []
 
-    if not docs:
-        logging.info("No documents found in Supabase DB.")
-        return
+        if not docs:
+            logging.info("No documents found in Supabase DB. Starting with empty index.")
+            return
 
-    embeddings: List[List[float]] = []
-    for doc in docs:
-        pdf_texts.append({
-            "filename": doc["filename"],
-            "content": doc["content"],
-            "file_path": doc.get("file_path") or doc["filename"],
-        })
-        embedding = doc["embedding"]
-        # Ensure embedding is a list of floats
-        if isinstance(embedding, str):
-            embedding = json.loads(embedding)
-        embeddings.append(embedding)
+        embeddings: List[List[float]] = []
+        for doc in docs:
+            pdf_texts.append({
+                "filename": doc["filename"],
+                "content": doc["content"],
+                "file_path": doc.get("file_path") or doc["filename"],
+            })
+            embedding = doc["embedding"]
+            # Ensure embedding is a list of floats
+            if isinstance(embedding, str):
+                embedding = json.loads(embedding)
+            embeddings.append(embedding)
 
-    # Add embeddings into FAISS
-    if embeddings:
-        embeddings_np: np.ndarray = np.array(embeddings).astype("float32")
-        index.add(embeddings_np)
+        # Add embeddings into FAISS
+        if embeddings:
+            embeddings_np: np.ndarray = np.array(embeddings).astype("float32")
+            index.add(embeddings_np)
 
-    logging.info(f"Loaded {len(docs)} documents into FAISS.")
+        logging.info(f"Loaded {len(docs)} documents into FAISS.")
+
+    except Exception as e:
+        logging.error(
+            f"Failed to load index from Supabase during startup: {type(e).__name__}: {e}. "
+            f"Starting with empty FAISS index. Uploads will still work."
+        )
+        # App continues with empty index; uploads will work on the next request
 
 
 # --------------------------------------------------------
