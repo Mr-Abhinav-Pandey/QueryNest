@@ -155,7 +155,7 @@ def load_index_from_db() -> None:
 def semantic_search(request: SearchRequest) -> List[SearchResult]:
     """
     Perform semantic search on indexed documents.
-    Returns a list of SearchResult with filename and text snippet.
+    Returns a list of SearchResult with filename, text snippet, and L2 distance score.
     """
     if len(pdf_texts) == 0:
         return []
@@ -165,11 +165,17 @@ def semantic_search(request: SearchRequest) -> List[SearchResult]:
     D, I = index.search(query_embedding, request.top_k)
 
     results: List[SearchResult] = []
-    for idx in I[0]:
+    for rank, idx in enumerate(I[0]):
         if idx == -1 or idx >= len(pdf_texts):
             continue
         file_info = pdf_texts[idx]
         snippet: str = file_info["content"][:200] + "..."
-        results.append(SearchResult(filename=file_info["filename"], snippet=snippet))
+        results.append(
+            SearchResult(
+                filename=file_info["filename"],
+                snippet=snippet,
+                score=float(D[0][rank]),
+            )
+        )
 
     return results

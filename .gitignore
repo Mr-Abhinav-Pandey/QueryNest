@@ -29,11 +29,8 @@ build/
 **/doc/api/
 
 # Android
-**/android/**/gradle-wrapper.jar
 **/android/.gradle/
 **/android/captures/
-**/android/gradlew
-**/android/gradlew.bat
 **/android/local.properties
 **/android/**/GeneratedPluginRegistrant.java
 **/android/key.properties
@@ -61,7 +58,6 @@ build/
 **/ios/Flutter/ephemeral/
 **/ios/ServiceDefinitions.json
 **/macos/Flutter/ephemeral/
-**/macos/Flutter/GeneratedPluginRegistrant.swift
 
 # IDE and editors
 .idea/
