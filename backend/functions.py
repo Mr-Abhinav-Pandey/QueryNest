@@ -266,3 +266,71 @@ def semantic_search(request: SearchRequest) -> List[SearchResult]:
         )
 
     return results
+
+
+def semantic_search_instrumented(request: SearchRequest) -> (List[SearchResult], Dict[str, float]):
+    """
+    Instrumented version of semantic_search that returns timing breakdowns:
+    - embedding_time: time to encode the query
+    - faiss_time: time spent in FAISS search
+    - assembly_time: time to assemble results (including signed URL generation)
+    - total_time: end-to-end time
+
+    Returns (results, timings)
+    """
+    timings: Dict[str, float] = {
+        "embedding_time": 0.0,
+        "faiss_time": 0.0,
+        "assembly_time": 0.0,
+        "total_time": 0.0,
+    }
+
+    import time
+
+    start_total = time.perf_counter()
+
+    if len(pdf_texts) == 0:
+        timings["total_time"] = time.perf_counter() - start_total
+        return [], timings
+
+    # 1) Encode query
+    t0 = time.perf_counter()
+    query_embedding: np.ndarray = model.encode([request.query])
+    t1 = time.perf_counter()
+    timings["embedding_time"] = t1 - t0
+
+    # 2) FAISS search
+    t0 = time.perf_counter()
+    D, I = index.search(query_embedding, request.top_k)
+    t1 = time.perf_counter()
+    timings["faiss_time"] = t1 - t0
+
+    # 3) Assemble results (includes signed URL generation)
+    t0 = time.perf_counter()
+    results: List[SearchResult] = []
+    for rank, idx in enumerate(I[0]):
+        if idx == -1 or idx >= len(pdf_texts):
+            continue
+        file_info = pdf_texts[idx]
+        snippet: str = file_info["content"][:200] + "..."
+        file_path: str = file_info.get("file_path") or file_info["filename"]
+        # Call get_pdf_signed_url (may return None if fails)
+        signed = None
+        try:
+            signed = get_pdf_signed_url(file_path)
+        except Exception:
+            signed = None
+
+        results.append(
+            SearchResult(
+                filename=file_info["filename"],
+                snippet=snippet,
+                score=float(D[0][rank]),
+                url=signed,
+            )
+        )
+    t1 = time.perf_counter()
+    timings["assembly_time"] = t1 - t0
+
+    timings["total_time"] = time.perf_counter() - start_total
+    return results, timings
