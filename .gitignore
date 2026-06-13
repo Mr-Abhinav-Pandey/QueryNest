@@ -89,3 +89,6 @@ app.*.map.json
 .atom/
 .svn/
 migrate_working_dir/
+
+.vs/
+backend/semantic_search_eval*.txt
