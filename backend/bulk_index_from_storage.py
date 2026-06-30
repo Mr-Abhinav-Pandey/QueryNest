@@ -1,8 +1,13 @@
 import argparse
 import io
+import logging
 import time
 import traceback
 from typing import List
+
+from logging_config import configure_logging
+
+configure_logging()
 
 from functions import (
     supabase,
@@ -13,6 +18,9 @@ from functions import (
     index,
     pdf_texts,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def download_object(name: str) -> bytes:
@@ -115,11 +123,11 @@ def main(argv: List[str] = None):
 
     commit = args.commit
 
-    print(f"Listing objects in bucket '{BUCKET_NAME}'...")
+    logger.info("Listing objects in bucket: %s", BUCKET_NAME)
     objs = supabase.storage.from_(BUCKET_NAME).list() or []
     pdfs = [o.get("name") for o in objs if o.get("name") and o.get("name").lower().endswith(".pdf")]
     total = len(pdfs)
-    print(f"Found {total} pdf objects in storage")
+    logger.info("Found pdf objects in storage: count=%s", total)
 
     # load existing DB rows
     docs_resp = supabase.table("documents").select("id,filename,file_path,file_hash").execute()
@@ -134,7 +142,7 @@ def main(argv: List[str] = None):
     if args.sample > 0:
         candidates = candidates[: args.sample]
 
-    print(f"Candidates to process: {len(candidates)} (existing in DB: {len(pdfs) - len(candidates)})")
+    logger.info("Candidates to process: count=%s existing_in_db=%s", len(candidates), len(pdfs) - len(candidates))
 
     processed = 0
     succeeded = 0
@@ -145,28 +153,23 @@ def main(argv: List[str] = None):
     start = time.time()
     for i, name in enumerate(candidates, 1):
         processed += 1
-        print(f"[{processed}/{len(candidates)}] Processing: {name}  ", end="", flush=True)
+        logger.info("Processing storage object %s of %s: %s", processed, len(candidates), name)
         ok, msg = process_file(name, commit=commit)
         if ok:
             succeeded += 1
-            print(f"OK ({msg})")
+            logger.info("Processed successfully: %s (%s)", name, msg)
         else:
             failed += 1
             failures.append({"name": name, "reason": msg})
-            print(f"FAILED ({msg})")
+            logger.warning("Processing failed: %s (%s)", name, msg)
 
     duration = time.time() - start
-    print("\nSummary:")
-    print(f"  storage_pdfs={total}")
-    print(f"  candidates_processed={processed}")
-    print(f"  succeeded={succeeded}")
-    print(f"  failed={failed}")
-    print(f"  duration_s={duration:.2f}")
+    logger.info("Summary: storage_pdfs=%s candidates_processed=%s succeeded=%s failed=%s duration_s=%.2f", total, processed, succeeded, failed, duration)
 
     if failures:
-        print("Failures (sample 20):")
+        logger.warning("Failures (sample 20):")
         for f in failures[:20]:
-            print(f" - {f['name']}: {f['reason']}")
+            logger.warning("- %s: %s", f['name'], f['reason'])
 
 
 if __name__ == "__main__":

@@ -1,8 +1,16 @@
 import time
 import statistics
 import numpy as np
+import logging
+from logging_config import configure_logging
+
+configure_logging()
+
 from functions import semantic_search_instrumented, pdf_texts, load_index_from_db, index
 from models import SearchRequest
+
+
+logger = logging.getLogger(__name__)
 
 NUM_RUNS = 100
 TOP_K = 5
@@ -25,16 +33,14 @@ def main():
     # Ensure index is loaded from DB before benchmarking
     load_index_from_db()
     if len(pdf_texts) == 0:
-        print("Warning: `pdf_texts` is empty — no indexed documents found. Bench will still run but results may be trivial.")
+        logger.warning("No indexed documents found; benchmark results may be trivial")
 
     # Report counts after rehydration
     try:
         faiss_ntotal = int(index.ntotal)
     except Exception:
         faiss_ntotal = index.ntotal
-    print(f"documents_loaded={len(pdf_texts)}")
-    print(f"faiss_ntotal={faiss_ntotal}")
-    print(f"len(pdf_texts)={len(pdf_texts)}")
+    logger.info("Benchmark index state: documents_loaded=%s faiss_ntotal=%s", len(pdf_texts), faiss_ntotal)
 
     # Choose a query from indexed content if available
     if len(pdf_texts) > 0:
@@ -65,15 +71,15 @@ def main():
     }
 
     # Print table
-    print("\nBenchmark results ({} runs)\n".format(NUM_RUNS))
-    print("Metric       | avg (s)  | median (s) | p95 (s)  | worst (s)")
-    print("----------------------------------------------------------")
+    logger.info("Benchmark results (%s runs)", NUM_RUNS)
+    logger.info("Metric       | avg (s)  | median (s) | p95 (s)  | worst (s)")
+    logger.info("----------------------------------------------------------")
     for key in ["embedding", "faiss", "assembly", "total"]:
         s = stats[key]
-        print(f"{key.ljust(12)}| {s['avg']:.6f} | {s['median']:.6f}   | {s['p95']:.6f} | {s['worst']:.6f}")
-    
-    print(f"Documents loaded: {len(pdf_texts)}")
-    print(f"FAISS vectors: {index.ntotal}")
+        logger.info("%s| %.6f | %.6f   | %.6f | %.6f", key.ljust(12), s['avg'], s['median'], s['p95'], s['worst'])
+
+    logger.info("Documents loaded: %s", len(pdf_texts))
+    logger.info("FAISS vectors: %s", index.ntotal)
 
 
 if __name__ == "__main__":

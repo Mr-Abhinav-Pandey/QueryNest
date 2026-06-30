@@ -20,13 +20,19 @@ from config import (
     SIGNED_URL_TTL_SECONDS,
 )
 
+
+logger = logging.getLogger(__name__)
+
 # Initialize Supabase client
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+logger.info("Supabase client initialized")
 
 # FAISS & Embedding Model
 model = SentenceTransformer(EMBEDDING_MODEL,device="cpu")
 dimension = EMBEDDING_DIMENSION
 index = faiss.IndexFlatL2(dimension)
+logger.info("Embedding model loaded: %s", EMBEDDING_MODEL)
+logger.info("FAISS index initialized: dimension=%s", dimension)
 
 # In-memory storage for metadata
 pdf_texts: List[Dict[str, str]] = []
@@ -54,7 +60,7 @@ def get_pdf_signed_url(file_path: str) -> Optional[str]:
         )
         return response.get("signedURL") or response.get("signedUrl")
     except Exception as e:
-        logging.warning(f"Failed to create signed URL for {file_path}: {e}")
+        logger.warning("Failed to create signed URL for %s: %s", file_path, e)
         return None
 
 
@@ -83,6 +89,8 @@ def upload_and_index(file: UploadFile) -> Dict[str, str]:
     If DB insert fails, rolls back storage upload.
     If FAISS insertion fails, preserves storage and DB data.
     """
+    logger.info("Upload started: filename=%s", file.filename)
+
     # Read file bytes
     file_bytes: bytes = file.file.read()
     file.file.seek(0)  # reset pointer
@@ -92,21 +100,23 @@ def upload_and_index(file: UploadFile) -> Dict[str, str]:
     try:
         existing = supabase.table("documents").select("*").eq("file_hash", file_hash).execute()
         if existing.data:
+            logger.info("Duplicate document detected: filename=%s", file.filename)
             return {"message": f"{file.filename} already uploaded."}
     except Exception as e:
-        logging.error(f"Duplicate check failed for {file.filename}: {e}")
+        logger.exception("Duplicate check failed: filename=%s", file.filename)
         raise HTTPException(status_code=500, detail="Failed to check for duplicates. Please try again.")
 
     # 2. Extract text from PDF
     text: str = extract_text_from_pdf(file)
     if not text.strip():
+        logger.warning("No extractable text found: filename=%s", file.filename)
         return {"message": "No extractable text found in PDF."}
 
     # 3. Generate embeddings
     try:
         embedding: np.ndarray = model.encode([text])
     except Exception as e:
-        logging.error(f"Embedding generation failed for {file.filename}: {e}")
+        logger.exception("Embedding generation failed: filename=%s", file.filename)
         raise HTTPException(status_code=500, detail="Failed to process document. Please try again.")
 
     file_path: str = f"{file.filename}"
@@ -117,7 +127,7 @@ def upload_and_index(file: UploadFile) -> Dict[str, str]:
             file=file_bytes, path=file_path, file_options={"upsert": "false"}
         )
     except Exception as e:
-        logging.error(f"Storage upload failed for {file.filename}: {e}")
+        logger.exception("Storage upload failed: filename=%s", file.filename)
         raise HTTPException(status_code=500, detail="Failed to store document. Please try again.")
 
     # 5. Insert metadata into Supabase DB (second external modification, can be rolled back)
@@ -137,15 +147,13 @@ def upload_and_index(file: UploadFile) -> Dict[str, str]:
             rollback_success = True
         except Exception as rollback_error:
             # Rollback itself failed - critical error
-            logging.critical(
-                f"CRITICAL: Upload rollback failed for {file.filename}. "
-                f"DB error: {db_error}. Rollback error: {rollback_error}. "
-                f"Orphaned file may exist in storage."
+            logger.exception(
+                "Upload rollback failed: filename=%s", file.filename
             )
         
         # Raise appropriate error based on rollback outcome
         if rollback_success:
-            logging.error(f"DB insert failed for {file.filename}, rolled back storage upload: {db_error}")
+            logger.exception("Database insert failed after storage upload: filename=%s", file.filename)
             raise HTTPException(status_code=500, detail="Upload failed. Please try again.")
         else:
             raise HTTPException(
@@ -162,16 +170,13 @@ def upload_and_index(file: UploadFile) -> Dict[str, str]:
             "file_path": file_path,
         })
     except Exception as e:
-        logging.error(
-            f"FAISS indexing failed for {file.filename}: {e}. "
-            f"File is stored in database and storage. Index will be rebuilt on restart."
-        )
+        logger.exception("FAISS indexing failed: filename=%s", file.filename)
         raise HTTPException(
             status_code=500,
             detail="Upload complete but indexing failed. File will be indexed on next restart."
         )
 
-    logging.info(f"Uploaded and indexed PDF: {file.filename}")
+    logger.info("Upload completed successfully: filename=%s", file.filename)
     return {"message": f"File {file.filename} uploaded and indexed successfully."}
 
 
@@ -187,6 +192,8 @@ def load_index_from_db() -> None:
     """
     global index, pdf_texts
 
+    logger.info("Loading indexed documents from Supabase")
+
     # Reset FAISS and local memory
     pdf_texts.clear()
     index.reset()
@@ -199,7 +206,7 @@ def load_index_from_db() -> None:
         docs: List[Dict[str, Any]] = response.data or []
 
         if not docs:
-            logging.info("No documents found in Supabase DB. Starting with empty index.")
+            logger.info("No documents found in Supabase DB")
             return
 
         embeddings: List[List[float]] = []
@@ -220,13 +227,10 @@ def load_index_from_db() -> None:
             embeddings_np: np.ndarray = np.array(embeddings).astype("float32")
             index.add(embeddings_np)
 
-        logging.info(f"Loaded {len(docs)} documents into FAISS.")
+        logger.info("Loaded indexed documents: count=%s", len(docs))
 
     except Exception as e:
-        logging.error(
-            f"Failed to load index from Supabase during startup: {type(e).__name__}: {e}. "
-            f"Starting with empty FAISS index."
-        )
+        logger.exception("Failed to load index from Supabase during startup")
         # App continues with empty index
 
 
@@ -240,9 +244,11 @@ def semantic_search(request: SearchRequest) -> List[SearchResult]:
     Returns a list of SearchResult with filename, snippet, score, and signed PDF URL.
     """
     if len(pdf_texts) == 0:
+        logger.info("Search request received with empty index: top_k=%s", request.top_k)
         return []
 
     # Encode query and search in FAISS
+    logger.info("Search request received: top_k=%s", request.top_k)
     query_embedding: np.ndarray = model.encode([request.query])
     D, I = index.search(query_embedding, request.top_k)
 

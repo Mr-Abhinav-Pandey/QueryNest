@@ -1,13 +1,17 @@
 import logging
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from functions import upload_and_index, semantic_search, load_index_from_db
 from contextlib import asynccontextmanager
-from models import SearchRequest, SearchResult
 from typing import Dict,List
-# --------------------------------------------------------
-# Logging Configuration
-# --------------------------------------------------------
-logging.basicConfig(level=logging.INFO)
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from logging_config import configure_logging
+
+
+configure_logging()
+
+from functions import upload_and_index, semantic_search, load_index_from_db
+from models import SearchRequest, SearchResult
+
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------
@@ -21,10 +25,12 @@ async def lifespan(app: FastAPI):
     Runs on startup and shutdown.
     """
     # --- Runs on startup ---
+    logger.info("Application startup: loading indexed documents")
     load_index_from_db()
+    logger.info("Application startup complete")
     yield
     # --- Runs on shutdown ---
-    logging.info("Shutting down app...")
+    logger.info("Application shutdown")
 
 
 app = FastAPI(
