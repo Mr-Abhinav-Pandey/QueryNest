@@ -1,34 +1,31 @@
 import logging
 import io
-import os
 import json
 import hashlib
 from typing import List, Dict, Any, Optional
-from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 from supabase import create_client
 from PyPDF2 import PdfReader
-from fastapi import UploadFile
+from fastapi import UploadFile, HTTPException
 from models import SearchRequest, SearchResult
 from typing import Dict
-
-# Load environment variables
-load_dotenv()
-
-# Supabase credentials
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-BUCKET_NAME = os.getenv("SUPABASE_BUCKET")
+from config import (
+    SUPABASE_URL,
+    SUPABASE_KEY,
+    SUPABASE_BUCKET,
+    EMBEDDING_MODEL,
+    EMBEDDING_DIMENSION,
+    SIGNED_URL_TTL_SECONDS,
+)
 
 # Initialize Supabase client
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # FAISS & Embedding Model
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 model = SentenceTransformer(EMBEDDING_MODEL,device="cpu")
-dimension = 384
+dimension = EMBEDDING_DIMENSION
 index = faiss.IndexFlatL2(dimension)
 
 # In-memory storage for metadata
@@ -52,8 +49,8 @@ def get_pdf_signed_url(file_path: str) -> Optional[str]:
     Create a time-limited signed URL for a PDF stored in Supabase Storage.
     """
     try:
-        response = supabase.storage.from_(BUCKET_NAME).create_signed_url(
-            file_path, 3600
+        response = supabase.storage.from_(SUPABASE_BUCKET).create_signed_url(
+            file_path, SIGNED_URL_TTL_SECONDS
         )
         return response.get("signedURL") or response.get("signedUrl")
     except Exception as e:
@@ -116,7 +113,7 @@ def upload_and_index(file: UploadFile) -> Dict[str, str]:
 
     # 4. Upload to Supabase Storage (first external modification)
     try:
-        supabase.storage.from_(BUCKET_NAME).upload(
+        supabase.storage.from_(SUPABASE_BUCKET).upload(
             file=file_bytes, path=file_path, file_options={"upsert": "false"}
         )
     except Exception as e:
@@ -136,7 +133,7 @@ def upload_and_index(file: UploadFile) -> Dict[str, str]:
         # Rollback: delete file from storage
         rollback_success = False
         try:
-            supabase.storage.from_(BUCKET_NAME).remove([file_path])
+            supabase.storage.from_(SUPABASE_BUCKET).remove([file_path])
             rollback_success = True
         except Exception as rollback_error:
             # Rollback itself failed - critical error
