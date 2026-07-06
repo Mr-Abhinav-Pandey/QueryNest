@@ -1,88 +1,152 @@
 # QueryNest
 
-QueryNest is a semantic PDF search application. Instead of searching files by name, you ask natural-language questions and retrieve the most relevant documents based on meaning.
+QueryNest is a semantic document retrieval platform for PDF files. It lets users upload documents, extracts text, generates Sentence Transformers embeddings, and searches by meaning using FAISS vector search with Supabase-backed storage and metadata. The result is an information retrieval workflow focused on semantic search rather than filename matching.
+
+---
+
+## Key Concepts
+
+- Semantic Search
+- Information Retrieval
+- Embeddings
+- Vector Search
+- Approximate Nearest Neighbor Retrieval
+- REST APIs
+- Document Processing
+
+---
 
 ## Features
 
-- Upload and manage PDF files from the client
-- Semantic search powered by embeddings and vector similarity
-- Natural-language queries to retrieve matching documents
-- Cross-platform Flutter client (Android, iOS, Web, Desktop)
+- PDF upload from a Flutter client
+- Text extraction from PDFs using `PyPDF2`
+- Sentence Transformer embeddings with `all-MiniLM-L6-v2`
+- FAISS indexing and top-k retrieval
+- Duplicate detection using SHA-256 file hashes
+- Bulk document indexing from Supabase Storage
+- Search benchmarking and profiling utilities
+- Signed URLs for document access
+- Supabase Storage and metadata persistence
+- Startup corpus reconstruction from Supabase on backend launch
+- Reliability improvements that prevent orphaned uploads on database failure
+- Explicit error handling around Supabase operations and signed URL generation
+- Cross-platform Flutter frontend for Android, iOS, Web, Linux, macOS, and Windows
+
+---
 
 ## Architecture
 
-```
-Flutter Client  →  FastAPI Backend  →  FAISS (in-memory index)
-                              ↓
-                         Supabase (storage + metadata)
-```
-
-| Layer    | Technology |
-|----------|------------|
-| Frontend | Flutter, Dart |
-| Backend  | FastAPI, Python |
-| Search   | Sentence Transformers (`all-MiniLM-L6-v2`), FAISS |
-| Storage  | Supabase (PDF bucket + `documents` table) |
-
-## Prerequisites
-
-- [Flutter SDK](https://docs.flutter.dev/get-started/install) (>= 3.x)
-- Python 3.10+ with `venv` support
-- A [Supabase](https://supabase.com/) project with:
-  - A storage bucket for PDFs
-  - A `documents` table for file metadata and embeddings
-
-## Getting Started
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/<your-username>/QueryNest.git
-cd QueryNest
+```text
+PDF Upload
+    ↓
+Text Extraction (PyPDF2)
+    ↓
+Embedding Generation (all-MiniLM-L6-v2)
+    ↓
+SHA-256 Duplicate Detection
+    ↓
+FAISS Vector Index
+    ↓
+Supabase Storage + Metadata
+    ↓
+Semantic Search
+    ↓
+Top-k Retrieval
+    ↓
+Signed URL Generation
+    ↓
+Client Response
 ```
 
-### 2. Backend setup
+---
+
+## Tech Stack
+
+**Frontend**
+- Flutter
+- Dart
+- `file_picker`
+- `url_launcher`
+
+**Backend**
+- FastAPI
+- Python
+- Pydantic
+- Supabase Python client
+
+**Information Retrieval**
+- Sentence Transformers
+- Embeddings
+- Semantic search
+- Query validation
+
+**Vector Search**
+- FAISS
+- In-memory vector index with startup reload from Supabase
+
+**Storage**
+- Supabase Storage
+- Supabase table for document text, embeddings, and file hashes
+
+**Document Processing**
+- `PyPDF2`
+- SHA-256 file hashing
+
+---
+
+## Repository Structure
+
+```text
+QueryNest/
+├── backend/
+│   ├── main.py
+│   ├── functions.py
+│   ├── models.py
+│   ├── bench_search.py
+│   ├── bulk_index_from_storage.py
+│   └── requirements.txt
+├── frontend/
+│   ├── lib/
+│   │   ├── main.dart
+│   │   ├── api_service.dart
+│   │   └── utils.dart
+│   ├── android/
+│   ├── ios/
+│   ├── linux/
+│   ├── macos/
+│   ├── web/
+│   └── windows/
+├── .env.example
+├── .gitignore
+├── LICENSE
+└── README.md
+```
+
+---
+
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Health check endpoint |
+| `POST` | `/upload_pdf` | Upload a PDF, extract text, generate embeddings, store metadata in Supabase, and index the document in FAISS |
+| `POST` | `/search` | Run semantic search and return top-k matching documents with snippets and signed URLs |
+
+---
+
+## Setup
+
+### Backend
 
 ```bash
 cd backend
 python -m venv .venv
-
-# Windows
 .venv\Scripts\activate
-
-# macOS / Linux
-source .venv/bin/activate
-
 pip install -r requirements.txt
-```
-
-Copy the environment template from the repository root and fill in your Supabase values:
-
-```bash
-# From the repository root
-cp .env.example backend/.env   # macOS / Linux
-copy ..\.env.example .env      # Windows (run from backend/)
-```
-
-Required variables:
-
-| Variable | Description |
-|----------|-------------|
-| `SUPABASE_URL` | Your Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (keep secret) |
-| `SUPABASE_BUCKET` | Storage bucket name for PDF uploads |
-
-Start the API server:
-
-```bash
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The API will be available at `http://localhost:8000`. Health check: `GET /`.
-
-### 3. Frontend setup
-
-From the repository root:
+### Frontend
 
 ```bash
 cd frontend
@@ -90,31 +154,38 @@ flutter pub get
 flutter run -d chrome
 ```
 
-The Flutter client expects the backend at `http://localhost:8000` by default (see `frontend/lib/api_service.dart`).
+### Environment Variables
 
-## API Endpoints
+Copy `.env.example` to `backend/.env` and set:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | Health check |
-| `POST` | `/upload_pdf` | Upload a PDF for indexing |
-| `POST` | `/search` | Semantic search over indexed documents |
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_BUCKET`
 
-## Project Structure
+The Flutter client points to `http://localhost:8000` in `frontend/lib/api_service.dart`.
 
-```
-QueryNest/
-├── backend/          # FastAPI server, embeddings, FAISS, Supabase integration
-├── frontend/         # Flutter cross-platform client
-├── .env.example      # Environment variable template (copy to backend/.env)
-├── LICENSE
-└── README.md
-```
+---
+## Performance and Reliability Improvements
 
-## Contributing
+- Duplicate prevention through file hashes before upload
+- Upload consistency with rollback if Supabase metadata insertion fails
+- Startup restoration that reloads embeddings and metadata into the FAISS index
+- Explicit error handling for Supabase storage, database, and signed URL failures
+- Benchmarking utilities that measure embedding, FAISS, result assembly, and total search time
 
-Pull requests are welcome. For larger changes, please open an issue first to discuss the proposed work.
+---
+
+## Future Improvements
+
+- Persistent FAISS indices for faster startup and reduced cold-start latency
+- Relevance scores and ranking confidence
+- Metadata-based filtering and pagination
+- Support for additional document formats
+- Automated tests and CI pipelines
+- Additional document formats
+
+---
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for details.
