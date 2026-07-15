@@ -16,6 +16,8 @@ from config import (
     APPLICATION_VERSION,
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
+    MAX_UPLOAD_SIZE_MB,
+    MAX_UPLOAD_SIZE_BYTES,
 )
 from functions import upload_and_index, semantic_search, load_index_from_db
 import functions as backend_functions
@@ -74,12 +76,28 @@ async def upload_pdf(file: UploadFile = File(...)) -> Dict[str, str]:
     Returns:
         dict: Message about upload status.
     """
-    if not file.filename.endswith(".pdf"):
+    if (
+        not file.filename.lower().endswith(".pdf")
+        or file.content_type != "application/pdf"
+    ):
         raise HTTPException(
-            status_code=400, detail="Only PDF files are supported."
+            status_code=400,
+            detail="Only PDF files are supported."
         )
-    return upload_and_index(file)
 
+    # Validate upload size
+    contents = await file.read()
+
+    if len(contents) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF exceeds maximum upload size of {MAX_UPLOAD_SIZE_MB} MB."
+        )
+
+    # Reset stream so upload_and_index() can read the file again
+    await file.seek(0)
+
+    return upload_and_index(file)
 
 @app.post("/search", tags=["Semantic Search"], response_model=List[SearchResult])
 async def search_files(request: SearchRequest) -> List[SearchResult]:
