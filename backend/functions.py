@@ -278,10 +278,19 @@ def semantic_search(request: SearchRequest) -> List[SearchResult]:
     logger.info("Search request received: top_k=%s", request.top_k)
     query_embedding: np.ndarray = model.encode([request.query])
     D, I = index.search(query_embedding, request.top_k)
-
+    MAX_DISTANCE = 1.20
     results: List[SearchResult] = []
     for rank, idx in enumerate(I[0]):
-        if idx == -1 or idx >= len(pdf_texts):
+        if idx == -1:
+            continue
+
+        distance = float(D[0][rank])
+
+        if distance > MAX_DISTANCE:
+            logger.debug(
+                "Skipping low-confidence result: %.4f",
+                distance,
+            )
             continue
         file_info = pdf_texts[idx]
         snippet: str = file_info["content"][:200] + "..."
@@ -290,7 +299,7 @@ def semantic_search(request: SearchRequest) -> List[SearchResult]:
             SearchResult(
                 filename=file_info["filename"],
                 snippet=snippet,
-                score=float(D[0][rank]),
+                score=round(distance, 4),
                 url=get_pdf_signed_url(file_path),
             )
         )
