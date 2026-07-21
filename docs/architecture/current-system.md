@@ -21,5 +21,3 @@ Post - to upload pdf, get - to search , and one more
 
 Data flow -
 frontend -> flutter -> supabase -> faiss -> llm -> python -> frontend 
-
-            

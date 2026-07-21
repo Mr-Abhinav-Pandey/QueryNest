@@ -37,6 +37,8 @@ logger.info("FAISS index initialized: dimension=%s", dimension)
 # In-memory storage for metadata
 pdf_texts: List[Dict[str, str]] = []
 
+from datetime import datetime, timedelta
+signed_url_cache: Dict[str, Dict[str, Any]] = {}
 
 # --------------------------------------------------------
 # Utility Functions
@@ -52,15 +54,40 @@ def compute_file_hash(file_bytes: bytes) -> str:
 
 def get_pdf_signed_url(file_path: str) -> Optional[str]:
     """
-    Create a time-limited signed URL for a PDF stored in Supabase Storage.
+    Return a signed URL for a PDF.
+    Uses an in-memory cache until the URL expires.
     """
+
+    now = datetime.utcnow()
+
+    cached = signed_url_cache.get(file_path)
+
+    if cached and cached["expires"] > now:
+        logger.debug("Signed URL cache hit: %s", file_path)
+        return cached["url"]
+
     try:
         response = supabase.storage.from_(SUPABASE_BUCKET).create_signed_url(
-            file_path, SIGNED_URL_TTL_SECONDS
+            file_path,
+            SIGNED_URL_TTL_SECONDS,
         )
-        return response.get("signedURL") or response.get("signedUrl")
+
+        url = response.get("signedURL") or response.get("signedUrl")
+
+        if url:
+            signed_url_cache[file_path] = {
+                "url": url,
+                "expires": now + timedelta(seconds=SIGNED_URL_TTL_SECONDS - 30),
+            }
+
+        return url
+
     except Exception as e:
-        logger.warning("Failed to create signed URL for %s: %s", file_path, e)
+        logger.warning(
+            "Failed to create signed URL for %s: %s",
+            file_path,
+            e,
+        )
         return None
 
 
